@@ -9,7 +9,7 @@ import {
   OutfitStatus,
   Shot
 } from "@/types";
-import { queueShots } from "@/services/api";
+import { queueShots, loadOutfits, persistOutfits } from "@/services/api";
 import { buildShotQueue } from "@/utils/shotBuilder";
 
 export type BackendStatus = "unknown" | "online" | "degraded" | "offline";
@@ -33,9 +33,11 @@ export type OutfitStore = {
   setShotQueue: (id: string, shots: Shot[]) => void;
 };
 
-const createOutfitUpdater = (set: (partial: (state: OutfitStore) => OutfitStore) => void) =>
+const createOutfitUpdater = (
+  setWithPersist: (updater: (state: OutfitStore) => OutfitStore) => void
+) =>
   (id: string, update: Partial<Outfit>) => {
-    set((state) => ({
+    setWithPersist((state) => ({
       ...state,
       outfits: state.outfits.map((outfit) =>
         outfit.id === id
@@ -51,96 +53,106 @@ const createOutfitUpdater = (set: (partial: (state: OutfitStore) => OutfitStore)
     }));
   };
 
-export const useOutfitStore = create<OutfitStore>((set, get) => ({
-  outfits: [],
-  backendStatus: "unknown",
-  addOutfit: (outfit) =>
-    set((state) => ({
-      ...state,
-      outfits: [...state.outfits, outfit]
-    })),
-  updateOutfit: createOutfitUpdater(set),
-  setBackendStatus: (status) => set((state) => ({ ...state, backendStatus: status })),
-  enqueueShots: async (id: string) => {
-    const outfit = get().outfits.find((item) => item.id === id);
-    if (!outfit) return;
+export const useOutfitStore = create<OutfitStore>((set, get) => {
+  const setWithPersist = (updater: (state: OutfitStore) => OutfitStore) => {
+    set((state) => {
+      const nextState = updater(state);
+      persistOutfits(nextState.outfits);
+      return nextState;
+    });
+  };
 
-    const confirmed = Array.from(outfit.confirmedCategories);
-    let shots = buildShotQueue(confirmed);
+  return {
+    outfits: loadOutfits(),
+    backendStatus: "unknown",
+    addOutfit: (outfit) =>
+      setWithPersist((state) => ({
+        ...state,
+        outfits: [...state.outfits, outfit]
+      })),
+    updateOutfit: createOutfitUpdater(setWithPersist),
+    setBackendStatus: (status) => set((state) => ({ ...state, backendStatus: status })),
+    enqueueShots: async (id: string) => {
+      const outfit = get().outfits.find((item) => item.id === id);
+      if (!outfit) return;
 
-    try {
-      const serverShots = await queueShots(confirmed);
-      shots = serverShots.length > 0 ? serverShots : shots;
-    } catch (error) {
-      console.warn("Falling back to client shot queue", error);
-    }
+      const confirmed = Array.from(outfit.confirmedCategories);
+      let shots = buildShotQueue(confirmed);
 
-    set((state) => ({
-      ...state,
-      outfits: state.outfits.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              shotQueue: shots,
-              status: OutfitStatus.QUEUED
-            }
-          : item
-      )
-    }));
-  },
-  updateSlots: (id, slots) =>
-    set((state) => ({
-      ...state,
-      outfits: state.outfits.map((outfit) =>
-        outfit.id === id
-          ? {
-              ...outfit,
-              slots: {
-                ...outfit.slots,
-                ...slots
+      try {
+        const serverShots = await queueShots(confirmed);
+        shots = serverShots.length > 0 ? serverShots : shots;
+      } catch (error) {
+        console.warn("Falling back to client shot queue", error);
+      }
+
+      setWithPersist((state) => ({
+        ...state,
+        outfits: state.outfits.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                shotQueue: shots,
+                status: OutfitStatus.QUEUED
               }
-            }
-          : outfit
-      )
-    })),
-  addGeneratedImage: (id, image) =>
-    set((state) => ({
-      ...state,
-      outfits: state.outfits.map((outfit) =>
-        outfit.id === id
-          ? {
-              ...outfit,
-              generatedImages: [...outfit.generatedImages, image]
-            }
-          : outfit
-      )
-    })),
-  setColorVariants: (id, data) =>
-    set((state) => ({
-      ...state,
-      outfits: state.outfits.map((outfit) =>
-        outfit.id === id
-          ? {
-              ...outfit,
-              colorVariantRequests: data.requests,
-              colorVariantCombinations: data.combinations
-            }
-          : outfit
-      )
-    })),
-  setShotQueue: (id, shots) =>
-    set((state) => ({
-      ...state,
-      outfits: state.outfits.map((outfit) =>
-        outfit.id === id
-          ? {
-              ...outfit,
-              shotQueue: shots
-            }
-          : outfit
-      )
-    }))
-}));
+            : item
+        )
+      }));
+    },
+    updateSlots: (id, slots) =>
+      setWithPersist((state) => ({
+        ...state,
+        outfits: state.outfits.map((outfit) =>
+          outfit.id === id
+            ? {
+                ...outfit,
+                slots: {
+                  ...outfit.slots,
+                  ...slots
+                }
+              }
+            : outfit
+        )
+      })),
+    addGeneratedImage: (id, image) =>
+      setWithPersist((state) => ({
+        ...state,
+        outfits: state.outfits.map((outfit) =>
+          outfit.id === id
+            ? {
+                ...outfit,
+                generatedImages: [...outfit.generatedImages, image]
+              }
+            : outfit
+        )
+      })),
+    setColorVariants: (id, data) =>
+      setWithPersist((state) => ({
+        ...state,
+        outfits: state.outfits.map((outfit) =>
+          outfit.id === id
+            ? {
+                ...outfit,
+                colorVariantRequests: data.requests,
+                colorVariantCombinations: data.combinations
+              }
+            : outfit
+        )
+      })),
+    setShotQueue: (id, shots) =>
+      setWithPersist((state) => ({
+        ...state,
+        outfits: state.outfits.map((outfit) =>
+          outfit.id === id
+            ? {
+                ...outfit,
+                shotQueue: shots
+              }
+            : outfit
+        )
+      }))
+  };
+});
 
 export const createEmptyOutfit = (params: {
   id: string;

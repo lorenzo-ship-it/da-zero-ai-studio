@@ -6,7 +6,9 @@ import {
   GeneratedImage,
   InputSlot,
   Outfit,
-  Shot
+  Shot,
+  StorageKeys,
+  OutfitStatus
 } from "@/types";
 
 const AnalyzeResponseSchema = z.object({
@@ -128,19 +130,129 @@ export const generateVariants = async (
   return VariantResponseSchema.parse(json) as GeneratedImage[];
 };
 
+type PersistedOutfit = Omit<Outfit, "confirmedCategories"> & {
+  confirmedCategories: ClothingCategory[];
+};
+
+const isBrowserEnvironment =
+  typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+
+const validCategories = new Set(Object.values(ClothingCategory));
+
+const toCategoryArray = (value: unknown): ClothingCategory[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is ClothingCategory =>
+    validCategories.has(item as ClothingCategory)
+  );
+};
+
+const sanitizeSlots = (
+  value: unknown
+): Partial<Record<InputSlot, string>> => {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const slotEntries = Object.entries(value as Record<string, unknown>);
+  const slotSet = new Set(Object.values(InputSlot));
+
+  return Object.fromEntries(
+    slotEntries.filter(
+      ([key, slotValue]) => slotSet.has(key as InputSlot) && typeof slotValue === "string"
+    )
+  ) as Partial<Record<InputSlot, string>>;
+};
+
+const isValidOutfitStatus = (value: unknown): value is OutfitStatus =>
+  typeof value === "string" && Object.values(OutfitStatus).includes(value as OutfitStatus);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const validColorVariantSteps = new Set<Outfit["colorVariantStep"]>([
+  "idle",
+  "configuring",
+  "generating",
+  "completed",
+  "error"
+]);
+
+const toColorVariantStep = (value: unknown): Outfit["colorVariantStep"] =>
+  typeof value === "string" && validColorVariantSteps.has(value as Outfit["colorVariantStep"])
+    ? (value as Outfit["colorVariantStep"])
+    : "idle";
+
+const sanitizeGeneratedColorVariants = (
+  value: unknown
+): Record<string, GeneratedImage[]> => {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(([, images]) => Array.isArray(images))
+  ) as Record<string, GeneratedImage[]>;
+};
+
 export const persistOutfits = (outfits: Outfit[]) => {
-  localStorage.setItem("ai-fashion-studio:outfits:v1", JSON.stringify(outfits));
+  if (!isBrowserEnvironment) {
+    return;
+  }
+
+  const serializable: PersistedOutfit[] = outfits.map((outfit) => ({
+    ...outfit,
+    confirmedCategories: Array.from(outfit.confirmedCategories)
+  }));
+
+  window.localStorage.setItem(StorageKeys.OUTFITS, JSON.stringify(serializable));
 };
 
 export const loadOutfits = (): Outfit[] => {
-  const raw = localStorage.getItem("ai-fashion-studio:outfits:v1");
-  if (!raw) return [];
+  if (!isBrowserEnvironment) {
+    return [];
+  }
+
+  const raw = window.localStorage.getItem(StorageKeys.OUTFITS);
+  if (!raw) {
+    return [];
+  }
+
   try {
-    const parsed = JSON.parse(raw) as Outfit[];
-    return parsed.map((outfit) => ({
-      ...outfit,
-      confirmedCategories: new Set(outfit.confirmedCategories)
-    }));
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((item): item is PersistedOutfit => isRecord(item))
+      .map((outfit) => ({
+        ...outfit,
+        status: isValidOutfitStatus(outfit.status) ? outfit.status : OutfitStatus.CONFIGURING,
+        detectedCategories: toCategoryArray(outfit.detectedCategories),
+        confirmedCategories: new Set(toCategoryArray(outfit.confirmedCategories)),
+        slots: sanitizeSlots(outfit.slots),
+        shotQueue: Array.isArray(outfit.shotQueue) ? outfit.shotQueue : [],
+        currentShotIndex:
+          typeof outfit.currentShotIndex === "number" ? outfit.currentShotIndex : 0,
+        generatedImages: Array.isArray(outfit.generatedImages) ? outfit.generatedImages : [],
+        correctivePrompts: Array.isArray(outfit.correctivePrompts)
+          ? outfit.correctivePrompts
+          : [],
+        errorMessage: typeof outfit.errorMessage === "string" ? outfit.errorMessage : null,
+        colorVariantStep: toColorVariantStep(outfit.colorVariantStep),
+        colorVariantRequests: Array.isArray(outfit.colorVariantRequests)
+          ? outfit.colorVariantRequests
+          : [],
+        colorVariantCombinations: Array.isArray(outfit.colorVariantCombinations)
+          ? outfit.colorVariantCombinations
+          : [],
+        generatedColorVariants: sanitizeGeneratedColorVariants(outfit.generatedColorVariants),
+        colorVariantError:
+          typeof outfit.colorVariantError === "string" ? outfit.colorVariantError : null
+      }));
   } catch (error) {
     console.warn("Unable to parse persisted outfits", error);
     return [];

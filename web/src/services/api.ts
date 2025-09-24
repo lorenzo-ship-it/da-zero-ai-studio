@@ -137,6 +137,43 @@ type PersistedOutfit = Omit<Outfit, "confirmedCategories"> & {
 const isBrowserEnvironment =
   typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 
+const safeGetItem = (key: StorageKeys): string | null => {
+  if (!isBrowserEnvironment) {
+    return null;
+  }
+
+  try {
+    return window.localStorage.getItem(key);
+  } catch (error) {
+    console.warn("Unable to read from localStorage", error);
+    return null;
+  }
+};
+
+const safeSetItem = (key: StorageKeys, value: string) => {
+  if (!isBrowserEnvironment) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn("Unable to write to localStorage", error);
+  }
+};
+
+const safeRemoveItem = (key: StorageKeys) => {
+  if (!isBrowserEnvironment) {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(key);
+  } catch (error) {
+    console.warn("Unable to remove localStorage item", error);
+  }
+};
+
 const validCategories = new Set(Object.values(ClothingCategory));
 
 const toCategoryArray = (value: unknown): ClothingCategory[] => {
@@ -207,7 +244,7 @@ export const persistOutfits = (outfits: Outfit[]) => {
     confirmedCategories: Array.from(outfit.confirmedCategories)
   }));
 
-  window.localStorage.setItem(StorageKeys.OUTFITS, JSON.stringify(serializable));
+  safeSetItem(StorageKeys.OUTFITS, JSON.stringify(serializable));
 };
 
 export const loadOutfits = (): Outfit[] => {
@@ -215,7 +252,7 @@ export const loadOutfits = (): Outfit[] => {
     return [];
   }
 
-  const raw = window.localStorage.getItem(StorageKeys.OUTFITS);
+  const raw = safeGetItem(StorageKeys.OUTFITS);
   if (!raw) {
     return [];
   }
@@ -255,6 +292,7 @@ export const loadOutfits = (): Outfit[] => {
       }));
   } catch (error) {
     console.warn("Unable to parse persisted outfits", error);
+    safeRemoveItem(StorageKeys.OUTFITS);
     return [];
   }
 };
